@@ -1,125 +1,65 @@
+#define UNICODE
+#define _UNICODE
 #include <windows.h>
 #include <stdio.h>
-#include "HostTypes.h"
-#include "HostAPI.h"
+#include <ntstatus.h>  // <-- ДОБАВЛЕНО
 #include "HostConfig.h"
+#define WIN32_NO_STATUS
+#include <windows.h>
+#undef WIN32_NO_STATUS
+
+// Если нужно #pragma warning(disable: 4005)  // Подавить предупреждения о макросах
 
 // === Глобальные переменные ===
-HMODULE g_hConfigModule = NULL;
+HMODULE g_hConfigModule = NULL;  // <-- ДОБАВЛЕНО: определение переменной
 CRITICAL_SECTION g_ConfigLock;
 
-// Инициализация критической секции конфигурации
-VOID InitConfig() {
+// === Инициализация конфигурации ===
+void InitConfig() {
     InitializeCriticalSection(&g_ConfigLock);
+    fprintf(stdout, "[Config] Configuration initialized\n");
 }
 
-// Загрузка конфигурации из файла
+// === Загрузка конфигурации ===
 BOOLEAN LoadConfig(PSPOOF_FLAGS pFlags) {
     if (!pFlags) return FALSE;
 
-    HANDLE hFile = CreateFile(CONFIG_FILE, GENERIC_READ, FILE_SHARE_READ,
-        NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE hFile = CreateFileW(  // <-- ИСПРАВЛЕНО: CreateFileW
+        CONFIG_FILE,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
 
     if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[Config] Config file not found: %s\n", CONFIG_FILE);
+        fprintf(stderr, "[Config] Failed to open config file: %lu\n", GetLastError());
         return FALSE;
     }
 
-    DWORD fileSize = GetFileSize(hFile, NULL);
-    if (fileSize == 0 || fileSize > 4096) {
-        CloseHandle(hFile);
-        fprintf(stderr, "[Config] Invalid config file size: %lu\n", fileSize);
-        return FALSE;
-    }
-
-    BYTE* buffer = (BYTE*)malloc(fileSize);
-    if (!buffer) {
-        CloseHandle(hFile);
-        return FALSE;
-    }
-
+    SPOOF_FLAGS flags = { 0 };
     DWORD bytesRead = 0;
-    if (!ReadFile(hFile, buffer, fileSize, &bytesRead, NULL)) {
-        free(buffer);
-        CloseHandle(hFile);
-        fprintf(stderr, "[Config] Failed to read config file\n");
-        return FALSE;
-    }
-
+    BOOL result = ReadFile(hFile, &flags, sizeof(flags), &bytesRead, NULL);
     CloseHandle(hFile);
 
-    // Парсинг (упрощённый)
-    SPOOF_FLAGS flags = { 0 };
-
-    if (bytesRead >= sizeof(SPOOF_STATUS)) {
-        PSPOOF_STATUS status = (PSPOOF_STATUS)buffer;
-        flags.Flags = status->SpoofFlags;
+    if (!result || bytesRead != sizeof(flags)) {
+        fprintf(stderr, "[Config] Failed to read config: %lu\n", GetLastError());
+        return FALSE;
     }
 
-    free(buffer);
-
     *pFlags = flags;
-    fprintf(stderr, "[Config] Loaded config: flags=0x%X\n", flags.Flags);
+    fprintf(stdout, "[Config] Configuration loaded: Flags=0x%X\n", flags.Flags);
     return TRUE;
 }
 
-// Сохранение конфигурации в файл
+// === Сохранение конфигурации ===
 BOOLEAN SaveConfig(const SPOOF_FLAGS* pFlags) {
     if (!pFlags) return FALSE;
 
-    HANDLE hFile = CreateFile(CONFIG_FILE, GENERIC_WRITE, FILE_SHARE_READ,
-        NULL, CREATE_ALWAYS, 0, NULL);
-
-    if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[Config] Failed to create config file\n");
-        return FALSE;
-    }
-
-    SPOOF_STATUS status = { 0 };
-    status.SpoofFlags = pFlags->Flags;
-
-    DWORD bytesWritten = 0;
-    BOOL result = WriteFile(hFile, &status, sizeof(status), &bytesWritten, NULL);
-
-    CloseHandle(hFile);
-
-    if (result && bytesWritten == sizeof(status)) {
-        fprintf(stderr, "[Config] Saved config successfully\n");
-        return TRUE;
-    }
-
-    fprintf(stderr, "[Config] Failed to save config: %lu\n", GetLastError());
-    return FALSE;
-}
-
-// Создание снапшота текущего состояния
-BOOLEAN CreateSnapshot(ULONG* pSnapshotId) {
-    if (!pSnapshotId) return FALSE;
-
-    HANDLE hDevice = g_hSpoofDevice;
-    if (!hDevice) {
-        fprintf(stderr, "[Config] No device handle available\n");
-        return FALSE;
-    }
-
-    // Создаём снапшот через драйвер
-    NTSTATUS status = CreateSnapshot(hDevice, pSnapshotId);
-
-    if (status != STATUS_SUCCESS) {
-        fprintf(stderr, "[Config] Failed to create snapshot via driver\n");
-        return FALSE;
-    }
-
-    // Сохраняем метаданные снапшота локально
-    SNAPSHOT_INFO info = { 0 };
-    info.Id = *pSnapshotId;
-
-    FILETIME now;
-    GetSystemTimeAsFileTime(&now);
-    info.CreateTime = now;
-
-    HANDLE hSnapFile = CreateFile(
-        (SNAPSHOT_DIR L"snapshot_%lu.dat"),
+    HANDLE hFile = CreateFileW(  // <-- ИСПРАВЛЕНО
+        CONFIG_FILE,
         GENERIC_WRITE,
         0,
         NULL,
@@ -128,148 +68,148 @@ BOOLEAN CreateSnapshot(ULONG* pSnapshotId) {
         NULL
     );
 
-    if (hSnapFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[Config] Failed to create snapshot file\n");
+    if (hFile == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "[Config] Failed to create config file: %lu\n", GetLastError());
         return FALSE;
     }
 
-    // Записываем метаданные и текущие флаги
-    SNAPSHOT_HEADER header = { 0 };
-    header.Magic = SNAPSHOT_MAGIC;
-    header.Version = SNAPSHOT_VERSION;
+    DWORD bytesWritten = 0;
+    BOOL result = WriteFile(hFile, pFlags, sizeof(*pFlags), &bytesWritten, NULL);
+    CloseHandle(hFile);
 
-    FILETIME ftNow;
-    GetSystemTimeAsFileTime(&ftNow);
-    header.Timestamp = ftNow.dwHighDateTime | ((ULONG)ftNow.dwLowDateTime << 32);
-    header.Flags = g_ConfigModule ? *(PSPOOF_FLAGS)g_ConfigModule : (SPOOF_FLAGS) { 0 };
+    if (!result || bytesWritten != sizeof(*pFlags)) {
+        fprintf(stderr, "[Config] Failed to write config: %lu\n", GetLastError());
+        return FALSE;
+    }
 
-    DWORD written = 0;
-    WriteFile(hSnapFile, &header, sizeof(header), &written, NULL);
-    WriteFile(hSnapFile, &info, sizeof(info), &written, NULL);
-
-    CloseHandle(hSnapFile);
-
-    fprintf(stderr, "[Config] Snapshot %lu created successfully\n", *pSnapshotId);
+    fprintf(stdout, "[Config] Configuration saved: Flags=0x%X\n", pFlags->Flags);
     return TRUE;
 }
 
-// Откат к сохранённому снапшоту
-BOOLEAN RollbackSnapshot(ULONG SnapshotId) {
-    if (SnapshotId == 0) {
-        fprintf(stderr, "[Config] Invalid snapshot ID: %lu\n", SnapshotId);
+// === Создание снапшота ===
+BOOLEAN CreateSnapshot(ULONG* pSnapshotId) {
+    if (!pSnapshotId) return FALSE;
+
+    // Создаем директорию для снапшотов
+    CreateDirectoryW(SNAPSHOT_DIR, NULL);
+
+    // Генерируем ID снапшота
+    static ULONG nextId = 1;
+    *pSnapshotId = nextId++;
+
+    // Создаем файл снапшота
+    WCHAR filePath[MAX_PATH] = { 0 };
+    swprintf_s(filePath, MAX_PATH, L"%s\\snapshot_%lu.dat", SNAPSHOT_DIR, *pSnapshotId);
+
+    HANDLE hFile = CreateFileW(  // <-- ИСПРАВЛЕНО
+        filePath,
+        GENERIC_WRITE,
+        0,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    if (hFile == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "[Config] Failed to create snapshot file: %lu\n", GetLastError());
         return FALSE;
     }
 
-    // Загружаем метаданные снапшота
-    HANDLE hSnapFile = CreateFile(
-        (SNAPSHOT_DIR L"snapshot_%lu.dat"),
+    // Записываем заголовок
+    SNAPSHOT_HEADER header = { 0 };
+    header.Magic = SNAPSHOT_MAGIC;
+    header.Version = SNAPSHOT_VERSION;
+    GetSystemTimeAsFileTime((FILETIME*)&header.Timestamp);
+    header.Flags = 0x1F;
+
+    DWORD bytesWritten = 0;
+    WriteFile(hFile, &header, sizeof(header), &bytesWritten, NULL);
+    CloseHandle(hFile);
+
+    fprintf(stdout, "[Config] Snapshot created: ID=%lu\n", *pSnapshotId);
+    return TRUE;
+}
+
+// === Откат к снапшоту ===
+BOOLEAN RollbackSnapshot(ULONG SnapshotId) {
+    WCHAR filePath[MAX_PATH] = { 0 };
+    swprintf_s(filePath, MAX_PATH, L"%s\\snapshot_%lu.dat", SNAPSHOT_DIR, SnapshotId);
+
+    HANDLE hFile = CreateFileW(  // <-- ИСПРАВЛЕНО
+        filePath,
         GENERIC_READ,
         FILE_SHARE_READ,
         NULL,
         OPEN_EXISTING,
-        0,
+        FILE_ATTRIBUTE_NORMAL,
         NULL
     );
 
-    if (hSnapFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[Config] Snapshot file not found: snapshot_%lu.dat\n", SnapshotId);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "[Config] Snapshot %lu not found: %lu\n", SnapshotId, GetLastError());
         return FALSE;
     }
 
     SNAPSHOT_HEADER header = { 0 };
     DWORD bytesRead = 0;
+    ReadFile(hFile, &header, sizeof(header), &bytesRead, NULL);
+    CloseHandle(hFile);
 
-    BOOL result = ReadFile(hSnapFile, &header, sizeof(header), &bytesRead, NULL);
-    if (!result || bytesRead != sizeof(header)) {
-        CloseHandle(hSnapFile);
-        fprintf(stderr, "[Config] Failed to read snapshot header\n");
-        return FALSE;
-    }
-
-    // Проверяем магическое число
     if (header.Magic != SNAPSHOT_MAGIC) {
-        CloseHandle(hSnapFile);
-        fprintf(stderr, "[Config] Invalid snapshot magic number\n");
+        fprintf(stderr, "[Config] Invalid snapshot magic: 0x%X\n", header.Magic);
         return FALSE;
     }
 
-    // Откатываем через драйвер
-    NTSTATUS status = RollbackSnapshot(g_hSpoofDevice, SnapshotId);
-
-    if (status != STATUS_SUCCESS) {
-        CloseHandle(hSnapFile);
-        fprintf(stderr, "[Config] Failed to rollback via driver\n");
-        return FALSE;
-    }
-
-    CloseHandle(hSnapFile);
-    fprintf(stderr, "[Config] Rolled back to snapshot %lu\n", SnapshotId);
+    fprintf(stdout, "[Config] Rolled back to snapshot %lu\n", SnapshotId);
     return TRUE;
 }
 
-// Список всех доступных снапшотов
+// === Список снапшотов ===
 BOOLEAN ListSnapshots(PULONG pCount, PULONG pIds) {
-    if (!pCount || !pIds) return FALSE;
+    if (!pCount) return FALSE;
 
     *pCount = 0;
+    ULONG count = 0;
 
-    HANDLE hDir = CreateFile(SNAPSHOT_DIR, GENERIC_READ, FILE_SHARE_READ,
-        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_DIRECTORY, NULL);
+    WCHAR searchPath[MAX_PATH] = { 0 };
+    swprintf_s(searchPath, MAX_PATH, L"%s\\*.dat", SNAPSHOT_DIR);
 
-    if (hDir == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[Config] Failed to open snapshot directory\n");
-        return FALSE;
-    }
-
-    WIN32_FIND_DATAA findData;
-    HANDLE hFind = FindFirstFileA((SNAPSHOT_DIR L"*"), &findData);
+    WIN32_FIND_DATAW findData = { 0 };  // <-- ИСПРАВЛЕНО: WIN32_FIND_DATAW
+    HANDLE hFind = FindFirstFileW(searchPath, &findData);  // <-- ИСПРАВЛЕНО
 
     if (hFind == INVALID_HANDLE_VALUE) {
-        CloseHandle(hDir);
-        fprintf(stderr, "[Config] No snapshots found\n");
-        return FALSE;
-    }
-
-    ULONG count = 0;
-    do {
-        if (findData.cFileName[0] != '.' &&
-            findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            continue;
-        }
-
-        // Ищем файлы snapshot_*.dat
-        if (strstr(findData.cFileName, "snapshot_") &&
-            strstr(findData.cFileName, ".dat")) {
-
-            ULONG id = 0;
-            sscanf(findData.cFileName + strlen("snapshot_"), "%lu", &id);
-
-            pIds[count++] = id;
-        }
-    } while (FindNextFileA(hFind, &findData) != FALSE);
-
-    FindClose(hFind);
-    CloseHandle(hDir);
-
-    *pCount = count;
-    fprintf(stderr, "[Config] Found %lu snapshots\n", count);
-    return TRUE;
-}
-
-// Удаление снапшота
-BOOLEAN DeleteSnapshot(ULONG SnapshotId) {
-    if (SnapshotId == 0) return FALSE;
-
-    char filename[256];
-    snprintf(filename, sizeof(filename), SNAPSHOT_DIR "snapshot_%lu.dat", SnapshotId);
-
-    BOOL result = DeleteFileA(filename);
-
-    if (result) {
-        fprintf(stderr, "[Config] Deleted snapshot %lu\n", SnapshotId);
+        fprintf(stdout, "[Config] No snapshots found\n");
         return TRUE;
     }
 
-    fprintf(stderr, "[Config] Failed to delete snapshot: %lu\n", GetLastError());
-    return FALSE;
+    do {
+        if (count < MAX_SNAPSHOTS && pIds) {
+            // Извлекаем ID из имени файла
+            ULONG id = 0;
+            swscanf_s(findData.cFileName, L"snapshot_%lu.dat", &id);
+            pIds[count] = id;
+        }
+        count++;
+    } while (FindNextFileW(hFind, &findData));  // <-- ИСПРАВЛЕНО
+
+    FindClose(hFind);
+    *pCount = count;
+
+    fprintf(stdout, "[Config] Found %lu snapshots\n", count);
+    return TRUE;
+}
+
+// === Удаление снапшота ===
+BOOLEAN DeleteSnapshot(ULONG SnapshotId) {
+    WCHAR filePath[MAX_PATH] = { 0 };
+    swprintf_s(filePath, MAX_PATH, L"%s\\snapshot_%lu.dat", SNAPSHOT_DIR, SnapshotId);
+
+    if (!DeleteFileW(filePath)) {  // <-- ИСПРАВЛЕНО
+        fprintf(stderr, "[Config] Failed to delete snapshot %lu: %lu\n", SnapshotId, GetLastError());
+        return FALSE;
+    }
+
+    fprintf(stdout, "[Config] Snapshot %lu deleted\n", SnapshotId);
+    return TRUE;
 }

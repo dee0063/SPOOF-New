@@ -1,5 +1,4 @@
 #pragma once
-
 #include <windows.h>
 #include <stdint.h>
 
@@ -13,14 +12,16 @@
 #define IOCTL_LIST_SNAPSHOTS   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 // === Структуры для IOCTL ===
-
 #pragma pack(push, 1)
 
 typedef struct _SPOOF_STATUS {
     BOOLEAN IsSpoofingActive;      // 1 = активен, 0 = неактивен
-    ULONG SpoofFlags;              // Текущие флаги спуфинга
-    ULONG SnapshotCount;           // Количество сохранённых снапшотов
+    ULONG   SpoofFlags;            // Текущие флаги спуфинга
+    ULONG   SnapshotCount;         // Количество сохранённых снапшотов
 } SPOOF_STATUS, * PSPOOF_STATUS;
 
 typedef struct _SPOOF_FLAGS {
     ULONG Flags;                   // Маска флага
+} SPOOF_FLAGS, * PSPOOF_FLAGS;
+
+#pragma pack(pop)

@@ -4,6 +4,12 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <winternl.h>
+#define WIN32_NO_STATUS
+#include <windows.h>
+#undef WIN32_NO_STATUS
+#include <ntstatus.h>
+
+// Если нужно #pragma warning(disable: 4005)  // Подавить предупреждения о макросах
 
 // === Глобальные переменные ===
 HANDLE g_hEACDetector = NULL;

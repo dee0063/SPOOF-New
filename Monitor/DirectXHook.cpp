@@ -7,6 +7,12 @@
 #include <d3d11.h>
 #include <d3d9.h>
 #include <d3d10_1.h>
+#define WIN32_NO_STATUS
+#include <windows.h>
+#undef WIN32_NO_STATUS
+#include <ntstatus.h>
+
+// Если нужно #pragma warning(disable: 4005)  // Подавить предупреждения о макросах
 
 // === Глобальные переменные ===
 HANDLE g_hDirectXHook = NULL;
